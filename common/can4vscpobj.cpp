@@ -842,7 +842,7 @@ int CCan4VSCPObj::close(void)
   m_bRun = false;
   m_bOpen = false;
 
-  SLEEP(1000); // Give working threads some time to terminate
+  //SLEEP(1000); // Give working threads some time to terminate
   
   LOCK_MUTEX(m_transmitMutex);
   LOCK_MUTEX(m_receiveMutex);
