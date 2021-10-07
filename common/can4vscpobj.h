@@ -698,12 +698,6 @@ public:
      */
     pthread_mutex_t m_can4vscpObjMutex;
 
-
-    /*!
-        id for worker thread
-     */
-    pthread_t m_threadId;
-
 #endif
 
 

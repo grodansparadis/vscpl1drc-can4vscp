@@ -198,10 +198,10 @@ CanalOpen(const char *pDevice, unsigned long flags)
 extern "C" int
 CanalClose(long handle)
 {
-    CCan4VSCPObj *pLog = theApp.getDriverObject(handle);
-    if (NULL == pLog) return 0;
+    CCan4VSCPObj *pObj = theApp.getDriverObject(handle);
+    if (NULL == pObj) return 0;
 
-    pLog->close();
+    pObj->close();
     theApp.removeDriverObject(handle);
 
     return CANAL_ERROR_SUCCESS;

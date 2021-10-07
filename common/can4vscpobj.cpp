@@ -186,8 +186,9 @@ CCan4VSCPObj::CCan4VSCPObj() {
 //
 
 CCan4VSCPObj::~CCan4VSCPObj() {
-  if (m_bRun)
+  if (m_bRun) {
     close();
+  }
 
   LOCK_MUTEX(m_transmitMutex);
   dll_removeAllNodes(&m_transmitList);
@@ -367,8 +368,9 @@ int CCan4VSCPObj::open(const char *pConfig, unsigned long flags) {
   m_stat.cntOverruns = 0;
 
   // if open we have noting to do
-  if (m_bRun)
+  if (m_bRun) {
     return CANAL_ERROR_SUCCESS;
+  }
 
 #ifdef DEBUG_CAN4VSCP_RECEIVE
 #ifdef WIN32
@@ -650,7 +652,7 @@ int CCan4VSCPObj::open(const char *pConfig, unsigned long flags) {
   pthread_mutex_init(&m_can4vscpObjMutex, NULL);
 
   // Create the log transmit thread.
-  if (pthread_create(&m_threadId, &thread_attr, workThreadTransmit, this)) {
+  if (pthread_create(&m_threadIdTransmit, &thread_attr, workThreadTransmit, this)) {
 
     syslog(LOG_ERR,
            "[vscpl1drv-can4vscp] Unable to create can4vscpdrv write thread.");
@@ -661,8 +663,8 @@ int CCan4VSCPObj::open(const char *pConfig, unsigned long flags) {
     }
 #endif
   }
-  // Create the log write thread.
-  if (pthread_create(&m_threadId, &thread_attr, workThreadReceive, this)) {
+  // Create the receive thread.
+  if (pthread_create(&m_threadIdReceive, &thread_attr, workThreadReceive, this)) {
     syslog(LOG_ERR,
            "[vscpl1drv-can4vscp] Unable to create can4vscpdrv receive thread.");
 #ifdef DEBUG_CAN4VSCP_RECEIVE
@@ -805,7 +807,7 @@ int CCan4VSCPObj::open(const char *pConfig, unsigned long flags) {
       }
     } else {
       if (m_bDebug) {
-        syslog(LOG_DEBUG, "vscpl1drv-can4vscp] Open standard mode success.");
+        syslog(LOG_DEBUG, "[vscpl1drv-can4vscp] Open standard mode success.");
       }
     }
     break;
@@ -822,7 +824,8 @@ int CCan4VSCPObj::open(const char *pConfig, unsigned long flags) {
 // close
 //
 
-int CCan4VSCPObj::close(void) {
+int CCan4VSCPObj::close(void)
+{
   cmdResponseMsg Msg;
 
   if (m_bDebug) {
@@ -830,8 +833,9 @@ int CCan4VSCPObj::close(void) {
   }
 
   // Do nothing if already terminated
-  if (!m_bRun)
+  if (!m_bRun) {
     return CANAL_ERROR_SUCCESS;
+  }
 
   sendCommandWait(VSCP_CAN4VSCP_DRIVER_COMMAND_CLOSE, NULL, 0, &Msg, 1000);
 
@@ -839,6 +843,20 @@ int CCan4VSCPObj::close(void) {
   m_bOpen = false;
 
   SLEEP(1000); // Give working threads some time to terminate
+  
+  LOCK_MUTEX(m_transmitMutex);
+  LOCK_MUTEX(m_receiveMutex);
+  LOCK_MUTEX(m_responseMutex);
+  if (m_bDebug) {
+    syslog(LOG_DEBUG, "[vscpl1drv-can4vscp] Mutexes locked");
+  }
+
+  UNLOCK_MUTEX(m_transmitMutex);
+  UNLOCK_MUTEX(m_receiveMutex);
+  UNLOCK_MUTEX(m_responseMutex);
+  if (m_bDebug) {
+    syslog(LOG_DEBUG, "[vscpl1drv-can4vscp] Mutexes unlocked");
+  }
 
 #ifdef DEBUG_CAN4VSCP_RECEIVE
   fclose(m_flog);
@@ -849,6 +867,9 @@ int CCan4VSCPObj::close(void) {
   // Close the com port if its open
   if (m_com.isOpen()) {
     m_com.close();
+    if (m_bDebug) {
+      syslog(LOG_DEBUG, "[vscpl1drv-can4vscp] Closing driver: channel closed.");
+    }
   }
 
 #ifdef WIN32
@@ -860,6 +881,9 @@ int CCan4VSCPObj::close(void) {
   sem_post(&m_receiveDataSem);
   sem_post(&m_transmitDataPutSem);
   sem_post(&m_transmitDataGetSem);
+  if (m_bDebug) {
+    syslog(LOG_DEBUG, "[vscpl1drv-can4vscp] Closing driver: Semaphores released.");
+  }
 #endif
 
   // terminate the worker thread
@@ -880,15 +904,33 @@ int CCan4VSCPObj::close(void) {
       break;
   }
 #else
-  sem_post(&m_receiveDataSem);
-  sem_post(&m_transmitDataPutSem);
-  sem_post(&m_transmitDataGetSem);
+  sem_destroy(&m_receiveDataSem);
+  sem_destroy(&m_transmitDataPutSem);
+  sem_destroy(&m_transmitDataGetSem);
+  if (m_bDebug) {
+    syslog(LOG_DEBUG, "[vscpl1drv-can4vscp] Closing driver: Semaphores destroyed.");
+  }
 
-  int *trv;
-  pthread_join(m_threadIdReceive, (void **)&trv);
-  pthread_join(m_threadIdTransmit, (void **)&trv);
+  pthread_mutex_destroy(&m_transmitMutex);
+  pthread_mutex_destroy(&m_receiveMutex);
+  pthread_mutex_destroy(&m_responseMutex);
+
+  pthread_join(m_threadIdReceive, NULL);
+  if (m_bDebug) {
+    syslog(LOG_DEBUG,
+                "[vscpl1drv-can4vscp] Closing driver: Thread receive rv = %d.",
+                1);
+  }
+  pthread_join(m_threadIdTransmit, NULL);
+  if (m_bDebug) {
+    syslog(LOG_DEBUG,
+                "[vscpl1drv-can4vscp] Closing driver: Thread receive rv = %d.",
+                2);
+  }
   pthread_mutex_destroy(&m_can4vscpMutex);
-
+  if (m_bDebug) {
+    syslog(LOG_DEBUG, "[vscpl1drv-can4vscp] Closing driver: Threads joined.");
+  }
 #endif
 
   if (m_bDebug) {
@@ -1090,8 +1132,9 @@ int CCan4VSCPObj::writeMsgBlocking(canalMsg *pMsg, uint32_t Timeout) {
     return CANAL_ERROR_PARAMETER;
 
   // Must be open
-  if (!m_bOpen)
+  if (!m_bOpen) {
     return CANAL_ERROR_NOT_OPEN;
+  }
 
   if (dll_getNodeCount(&m_transmitList) > CAN4VSCP_MAX_SNDMSG) {
 
@@ -1247,7 +1290,8 @@ int CCan4VSCPObj::readMsgBlocking(canalMsg *pMsg, uint32_t timeout) {
 // dataAvailable
 //
 
-int CCan4VSCPObj::dataAvailable(void) {
+int CCan4VSCPObj::dataAvailable(void) 
+{
   if (!m_bOpen) {
     return 0;
   }
@@ -1274,7 +1318,8 @@ int CCan4VSCPObj::getStatistics(PCANALSTATISTICS pCanalStatistics) {
 //	getStatus
 //
 
-int CCan4VSCPObj::getStatus(PCANALSTATUS pCanalStatus) {
+int CCan4VSCPObj::getStatus(PCANALSTATUS pCanalStatus) 
+{
   // Must be a message pointer
   if (NULL == pCanalStatus) {
     return CANAL_ERROR_PARAMETER;
@@ -2539,8 +2584,22 @@ void CCan4VSCPObj::readSerialData(void) {
 //
 //
 
-static bool transmitMessage(CCan4VSCPObj *pobj, uint8_t *pseq) {
+static bool transmitMessage(CCan4VSCPObj *pobj, uint8_t *pseq)
+{
   canalMsg msg;
+
+  // Check pointers
+  if ( NULL == pobj ) return false;
+  if ( NULL == pseq ) return false;
+
+  // Must be open
+  if (!pobj->m_bOpen) {
+    return false;
+  }
+
+  if (pobj->m_bDebug) {
+    syslog(LOG_DEBUG, "[vscpl1drv-can4vscp] transmitMessage");
+  }
 
   // Must be a message to transmit
   if (0 == pobj->m_transmitList.nCount)
@@ -2669,6 +2728,10 @@ void *workThreadTransmit(void *pObject)
   // Clear ACK/NACK response structure
   memset(&pobj->msgResponseInfo, 0, sizeof(pobj->msgResponseInfo));
 
+
+  // --------------------------------------------------------------------------
+
+
   while (pobj->m_bRun) {
 
     // Are we in transmission
@@ -2718,7 +2781,8 @@ void *workThreadTransmit(void *pObject)
         UNLOCK_MUTEX(pobj->m_transmitMutex);
 
         bTransmissionInProgress = false;
-      } else {
+      } 
+      else {
         // NACK - Message send failed - Retransmit
         transmitMessage(pobj, &seq);
         continue;
@@ -2773,7 +2837,8 @@ void *workThreadTransmit(void *pObject)
         UNLOCK_MUTEX(pobj->m_transmitMutex);
       }
 
-    } else {
+    } 
+    else {
 
       // Check for i/f inactivity
       if (pobj->m_initFlag & CAN4VSCP_FLAG_ENABLE_REOPEN) {
@@ -2790,9 +2855,15 @@ void *workThreadTransmit(void *pObject)
 
   } // while
 
+// --------------------------------------------------------------------------
+
 #ifdef WIN32
   ExitThread(errorCode);
 #else
+  rv = 0xaa;
+  if (pobj->m_bDebug) {
+    syslog(LOG_DEBUG, "[vscpl1drv-can4vscp] TX thread terminating");
+  }
   pthread_exit(&rv);
 #endif
 }
@@ -2836,6 +2907,10 @@ void *workThreadReceive(void *pObject)
 #ifdef WIN32
   ExitThread(errorCode);
 #else
+  rv = 0x55;
+  if (pobj->m_bDebug) {
+    syslog(LOG_DEBUG, "[vscpl1drv-can4vscp] RX thread terminating");
+  }
   pthread_exit(&rv);
 #endif
 }
